@@ -101,43 +101,50 @@ app.post("/api/chat", async (request, response) => {
 
     if (!openai) {
       assistantReply =
-        "OPENAI_API_KEY is not configured yet. I saved your message to the database, but I need an API key before I can respond intelligently.";
+        "OPENAI_API_KEY is not configured yet. I saved your message, but I need a valid API key before I can respond intelligently.";
     } else {
-      const completion = await openai.responses.create({
-        model: "gpt-4.1-mini",
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "You are a helpful AI assistant inside a user-profile app. Answer clearly, be concise, and personalize lightly when useful.",
-              },
-            ],
-          },
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: `The current user is ${user.name} and their email is ${user.email}.`,
-              },
-            ],
-          },
-          ...history.map((entry) => ({
-            role: entry.role,
-            content: [
-              {
-                type: "input_text",
-                text: entry.content,
-              },
-            ],
-          })),
-        ],
-      });
+      try {
+        const completion = await openai.responses.create({
+          model: "gpt-4.1-mini",
+          input: [
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text:
+                    "You are a helpful AI assistant inside a user-profile app. Answer clearly, be concise, and personalize lightly when useful.",
+                },
+              ],
+            },
+            {
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `The current user is ${user.name} and their email is ${user.email}.`,
+                },
+              ],
+            },
+            ...history.map((entry) => ({
+              role: entry.role,
+              content: [
+                {
+                  type: "input_text",
+                  text: entry.content,
+                },
+              ],
+            })),
+          ],
+        });
 
-      assistantReply = completion.output_text || "I could not generate a reply.";
+        assistantReply =
+          completion.output_text || "I could not generate a reply.";
+      } catch (error) {
+        console.error("OpenAI request failed:", error.message);
+        assistantReply =
+          "I saved your message, but the AI reply could not be generated because the current OpenAI API key does not have the required permissions. Please update the key and try again.";
+      }
     }
 
     await saveMessage(user.id, "assistant", assistantReply);

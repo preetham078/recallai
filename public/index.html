@@ -3,71 +3,190 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Memory Chat AI</title>
+    <title>PingMe</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=profile-slide-4" />
   </head>
   <body>
-    <main class="app-shell">
-      <section class="hero">
-        <p class="eyebrow">AI APP WITH MEMORY</p>
-        <h1>Talk with your assistant and keep every user conversation saved.</h1>
-        <p class="subtitle">
-          Create a user profile, chat naturally, and reload the conversation
-          history whenever the same user returns.
-        </p>
-      </section>
-
-      <section class="card setup-card">
-        <form id="user-form" class="user-form">
-          <div>
-            <label for="name">Name</label>
-            <input id="name" name="name" placeholder="Priya" required />
+    <main class="messenger-shell">
+      <aside class="sidebar">
+        <div class="mobile-topbar" aria-label="Mobile app bar">
+          <h1>WhatsChat</h1>
+          <div class="topbar-actions">
+            <span class="icon-search"></span>
+            <button id="open-profile-button" class="icon-menu-button-top" type="button" aria-label="Open profile">
+              <span class="icon-menu"></span>
+            </button>
           </div>
-          <div>
-            <label for="email">Email</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              placeholder="priya@example.com"
-              required
-            />
-          </div>
-          <button type="submit">Create or Load User</button>
-        </form>
-        <p id="user-status" class="status"></p>
-      </section>
-
-      <section class="card chat-card">
-        <div class="chat-header">
-          <div>
-            <h2>Conversation</h2>
-            <p id="chat-meta">No active user yet.</p>
-          </div>
-          <span id="api-status" class="pill">Checking AI status...</span>
+        </div>
+        <div class="wa-tabs" aria-label="Mobile sections">
+          <button class="active" type="button">Chats</button>
+          <button type="button">Status</button>
+          <button type="button">Calls</button>
         </div>
 
-        <div id="messages" class="messages"></div>
+        <div class="brand-row">
+          <div class="brand-mark">P</div>
+          <div>
+            <h1>WhatsChat</h1>
+            <p>Username messaging</p>
+          </div>
+        </div>
 
-        <form id="chat-form" class="chat-form">
-          <textarea
-            id="message"
-            name="message"
-            rows="3"
-            placeholder="Ask something..."
-            required
-          ></textarea>
-          <button type="submit">Send Message</button>
+        <section id="auth-panel" class="auth-panel">
+          <div class="tabs" role="tablist" aria-label="Account actions">
+            <button id="show-signup" class="tab active" type="button">
+              Sign up
+            </button>
+            <button id="show-login" class="tab" type="button">Log in</button>
+          </div>
+
+          <form id="signup-form" class="auth-form">
+            <label>
+              Name
+              <input name="displayName" placeholder="Priya Sharma" required />
+            </label>
+            <label>
+              Username
+              <input
+                name="username"
+                placeholder="priya_23"
+                autocomplete="username"
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                name="password"
+                type="password"
+                autocomplete="new-password"
+                minlength="4"
+                required
+              />
+            </label>
+            <label>
+              Bio
+              <input name="bio" placeholder="Coffee, code, late replies" />
+            </label>
+            <button type="submit">Create account</button>
+          </form>
+
+          <form id="login-form" class="auth-form hidden">
+            <label>
+              Username
+              <input
+                name="username"
+                placeholder="priya_23"
+                autocomplete="username"
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </label>
+            <button type="submit">Log in</button>
+          </form>
+        </section>
+
+        <section id="profile-panel" class="profile-panel hidden" aria-hidden="true">
+          <div class="mobile-profile-top">
+            <h2 id="mobile-profile-username">@username</h2>
+            <button id="close-profile-button" class="icon-menu-button" type="button" aria-label="Back to chats">
+              <span></span>
+            </button>
+          </div>
+          <div class="profile-card">
+            <div id="profile-avatar" class="avatar">P</div>
+            <div>
+              <h2 id="profile-name">Profile</h2>
+              <p id="profile-username">@username</p>
+            </div>
+          </div>
+          <div class="profile-stats" aria-label="Profile stats">
+            <div><strong>0</strong><span>posts</span></div>
+            <div><strong>0</strong><span>followers</span></div>
+            <div><strong>0</strong><span>following</span></div>
+          </div>
+          <div class="profile-actions">
+            <button type="button">Edit profile</button>
+            <button type="button">Share profile</button>
+          </div>
+          <div class="profile-grid" aria-label="Profile posts">
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+          </div>
+          <button id="logout-button" class="ghost-button" type="button">
+            Log out
+          </button>
+        </section>
+
+        <section id="people-panel" class="people-panel hidden">
+          <label class="search-label">
+            Message by username
+            <input id="search-input" placeholder="Search @username" />
+          </label>
+          <div id="people-list" class="people-list"></div>
+          <h2 class="section-title">Chats</h2>
+          <div id="inbox-list" class="people-list"></div>
+        </section>
+      </aside>
+
+      <section class="chat-area">
+        <header class="chat-header">
+          <button id="back-button" class="back-button" type="button" aria-label="Back to chats">
+            <span aria-hidden="true"></span>
+          </button>
+          <div id="chat-avatar" class="avatar muted">?</div>
+          <div>
+            <h2 id="chat-title">Choose someone to message</h2>
+            <p id="chat-subtitle">Create an account, search a username, then start texting.</p>
+          </div>
+        </header>
+
+        <div id="messages" class="messages">
+          <div class="empty-state">Your messages will appear here.</div>
+        </div>
+
+        <form id="message-form" class="message-form">
+          <input
+            id="message-input"
+            placeholder="Type a message"
+            autocomplete="off"
+            disabled
+          />
+          <button id="send-button" type="submit" disabled>Send</button>
         </form>
+        <p id="status" class="status"></p>
       </section>
+
+      <nav class="bottom-nav" aria-label="Mobile navigation" aria-hidden="true">
+        <button id="nav-home" type="button" aria-label="Home"><span class="nav-home"></span></button>
+        <button id="nav-search" type="button" aria-label="Search"><span class="nav-search"></span></button>
+        <button id="nav-create" type="button" aria-label="Create"><span class="nav-create"></span></button>
+        <button id="nav-messages" class="active" type="button" aria-label="Messages"><span class="nav-message"></span></button>
+        <button id="nav-profile" type="button" aria-label="Profile"><span class="nav-profile"></span></button>
+      </nav>
+      <button id="floating-compose" class="floating-compose" type="button" aria-label="Start chat">
+        <span></span>
+      </button>
     </main>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=profile-slide-4"></script>
   </body>
 </html>

@@ -1,163 +1,127 @@
-require("dotenv").config();
-
 const path = require("path");
 const express = require("express");
-const OpenAI = require("openai");
 const {
   initializeDatabase,
-  createOrGetUser,
-  saveMessage,
-  getMessagesForUser,
-  get,
+  createAccount,
+  loginAccount,
+  searchAccounts,
+  saveDirectMessage,
+  getConversation,
+  getInbox,
+  getAccountById,
 } = require("./db");
 
 const app = express();
 const port = process.env.PORT || 3000;
-const hasOpenAIKey = Boolean(process.env.OPENAI_API_KEY);
-
-const openai = hasOpenAIKey
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+function parseAccountId(request) {
+  const accountId = Number(request.query.accountId || request.body.accountId);
+  return Number.isInteger(accountId) && accountId > 0 ? accountId : null;
+}
+
+async function requireAccount(request, response) {
+  const accountId = parseAccountId(request);
+
+  if (!accountId) {
+    response.status(401).json({ error: "Sign in first." });
+    return null;
+  }
+
+  const account = await getAccountById(accountId);
+
+  if (!account) {
+    response.status(401).json({ error: "Account not found. Sign in again." });
+    return null;
+  }
+
+  return account;
+}
+
 app.get("/api/health", (_request, response) => {
-  response.json({
-    ok: true,
-    openaiConfigured: hasOpenAIKey,
-  });
+  response.json({ ok: true });
 });
 
-app.post("/api/users", async (request, response) => {
-  const { name, email } = request.body || {};
-
-  if (!name || !email) {
-    response.status(400).json({
-      error: "Name and email are required.",
-    });
-    return;
-  }
-
+app.post("/api/accounts", async (request, response) => {
   try {
-    const user = await createOrGetUser({ name, email });
-    const messages = await getMessagesForUser(user.id);
-
-    response.json({ user, messages });
+    const account = await createAccount(request.body || {});
+    response.status(201).json({ account });
   } catch (error) {
-    response.status(500).json({
-      error: "Unable to create or load the user.",
-      details: error.message,
-    });
+    response.status(400).json({ error: error.message });
   }
 });
 
-app.get("/api/users/:userId/messages", async (request, response) => {
+app.post("/api/login", async (request, response) => {
   try {
-    const user = await get(`SELECT id FROM users WHERE id = ?`, [
-      request.params.userId,
-    ]);
+    const account = await loginAccount(request.body || {});
+    response.json({ account });
+  } catch (error) {
+    response.status(401).json({ error: error.message });
+  }
+});
 
-    if (!user) {
-      response.status(404).json({ error: "User not found." });
+app.get("/api/accounts/search", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
       return;
     }
 
-    const messages = await getMessagesForUser(request.params.userId);
-    response.json({ messages });
+    const results = await searchAccounts(request.query.q || "", account.id);
+    response.json({ accounts: results });
   } catch (error) {
-    response.status(500).json({
-      error: "Unable to load messages.",
-      details: error.message,
-    });
+    response.status(500).json({ error: "Unable to search accounts." });
   }
 });
 
-app.post("/api/chat", async (request, response) => {
-  const { userId, message } = request.body || {};
-
-  if (!userId || !message) {
-    response.status(400).json({
-      error: "userId and message are required.",
-    });
-    return;
-  }
-
+app.get("/api/inbox", async (request, response) => {
   try {
-    const user = await get(`SELECT id, name, email FROM users WHERE id = ?`, [
-      userId,
-    ]);
+    const account = await requireAccount(request, response);
 
-    if (!user) {
-      response.status(404).json({ error: "User not found." });
+    if (!account) {
       return;
     }
 
-    await saveMessage(user.id, "user", message);
+    response.json({ conversations: await getInbox(account.id) });
+  } catch (error) {
+    response.status(500).json({ error: "Unable to load inbox." });
+  }
+});
 
-    const history = await getMessagesForUser(user.id, 12);
+app.get("/api/messages/:username", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
 
-    let assistantReply;
-
-    if (!openai) {
-      assistantReply =
-        "OPENAI_API_KEY is not configured yet. I saved your message, but I need a valid API key before I can respond intelligently.";
-    } else {
-      try {
-        const completion = await openai.responses.create({
-          model: "gpt-4.1-mini",
-          input: [
-            {
-              role: "system",
-              content: [
-                {
-                  type: "input_text",
-                  text:
-                    "You are a helpful AI assistant inside a user-profile app. Answer clearly, be concise, and personalize lightly when useful.",
-                },
-              ],
-            },
-            {
-              role: "system",
-              content: [
-                {
-                  type: "input_text",
-                  text: `The current user is ${user.name} and their email is ${user.email}.`,
-                },
-              ],
-            },
-            ...history.map((entry) => ({
-              role: entry.role,
-              content: [
-                {
-                  type: "input_text",
-                  text: entry.content,
-                },
-              ],
-            })),
-          ],
-        });
-
-        assistantReply =
-          completion.output_text || "I could not generate a reply.";
-      } catch (error) {
-        console.error("OpenAI request failed:", error.message);
-        assistantReply =
-          "I saved your message, but the AI reply could not be generated because the current OpenAI API key does not have the required permissions. Please update the key and try again.";
-      }
+    if (!account) {
+      return;
     }
 
-    await saveMessage(user.id, "assistant", assistantReply);
-
-    response.json({
-      reply: assistantReply,
-      messages: await getMessagesForUser(user.id),
-    });
+    response.json(await getConversation(account.id, request.params.username));
   } catch (error) {
-    response.status(500).json({
-      error: "Unable to process the chat request.",
-      details: error.message,
+    response.status(404).json({ error: error.message });
+  }
+});
+
+app.post("/api/messages", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    const conversation = await saveDirectMessage({
+      senderId: account.id,
+      receiverUsername: request.body.receiverUsername,
+      content: request.body.content,
     });
+
+    response.status(201).json(conversation);
+  } catch (error) {
+    response.status(400).json({ error: error.message });
   }
 });
 

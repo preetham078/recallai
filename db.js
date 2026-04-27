@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 
@@ -48,83 +49,257 @@ function all(sql, params = []) {
 
 async function initializeDatabase() {
   await run(`
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      bio TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
   await run(`
-    CREATE TABLE IF NOT EXISTS messages (
+    CREATE TABLE IF NOT EXISTS direct_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+      sender_id INTEGER NOT NULL,
+      receiver_id INTEGER NOT NULL,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id)
+      FOREIGN KEY(sender_id) REFERENCES accounts(id),
+      FOREIGN KEY(receiver_id) REFERENCES accounts(id)
     )
+  `);
+
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_direct_messages_pair
+    ON direct_messages(sender_id, receiver_id, id)
   `);
 }
 
-async function createOrGetUser({ name, email }) {
-  const normalizedEmail = email.trim().toLowerCase();
-  const normalizedName = name.trim();
+function normalizeUsername(username) {
+  return String(username || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "");
+}
 
-  const existingUser = await get(
-    `SELECT id, name, email, created_at FROM users WHERE email = ?`,
-    [normalizedEmail],
-  );
+function hashPassword(password) {
+  return crypto.createHash("sha256").update(String(password)).digest("hex");
+}
 
-  if (existingUser) {
-    if (existingUser.name !== normalizedName) {
-      await run(`UPDATE users SET name = ? WHERE id = ?`, [
-        normalizedName,
-        existingUser.id,
-      ]);
-    }
-
-    return {
-      ...existingUser,
-      name: normalizedName,
-    };
+function publicAccount(account) {
+  if (!account) {
+    return null;
   }
 
-  const result = await run(
-    `INSERT INTO users (name, email) VALUES (?, ?)`,
-    [normalizedName, normalizedEmail],
-  );
-
-  return get(`SELECT id, name, email, created_at FROM users WHERE id = ?`, [
-    result.id,
-  ]);
+  return {
+    id: account.id,
+    displayName: account.display_name,
+    username: account.username,
+    bio: account.bio,
+    createdAt: account.created_at,
+  };
 }
 
-function saveMessage(userId, role, content) {
-  return run(
-    `INSERT INTO messages (user_id, role, content) VALUES (?, ?, ?)`,
-    [userId, role, content.trim()],
-  );
+async function createAccount({ displayName, username, password, bio = "" }) {
+  const cleanDisplayName = String(displayName || "").trim();
+  const cleanUsername = normalizeUsername(username);
+  const cleanPassword = String(password || "");
+  const cleanBio = String(bio || "").trim();
+
+  if (!cleanDisplayName || !cleanUsername || !cleanPassword) {
+    throw new Error("Name, username, and password are required.");
+  }
+
+  if (!/^[a-z0-9._]{3,20}$/.test(cleanUsername)) {
+    throw new Error(
+      "Username must be 3-20 characters and use letters, numbers, dots, or underscores.",
+    );
+  }
+
+  if (cleanPassword.length < 4) {
+    throw new Error("Password must be at least 4 characters.");
+  }
+
+  try {
+    const result = await run(
+      `
+        INSERT INTO accounts (display_name, username, password_hash, bio)
+        VALUES (?, ?, ?, ?)
+      `,
+      [cleanDisplayName, cleanUsername, hashPassword(cleanPassword), cleanBio],
+    );
+
+    const account = await getAccountById(result.id);
+    return publicAccount(account);
+  } catch (error) {
+    if (error.message.includes("UNIQUE")) {
+      throw new Error("That username is already taken.");
+    }
+
+    throw error;
+  }
 }
 
-function getMessagesForUser(userId, limit = 50) {
-  return all(
+async function loginAccount({ username, password }) {
+  const account = await get(
+    `SELECT * FROM accounts WHERE username = ?`,
+    [normalizeUsername(username)],
+  );
+
+  if (!account || account.password_hash !== hashPassword(password)) {
+    throw new Error("Username or password is incorrect.");
+  }
+
+  return publicAccount(account);
+}
+
+function getAccountById(accountId) {
+  return get(`SELECT * FROM accounts WHERE id = ?`, [accountId]);
+}
+
+async function searchAccounts(query, currentUserId) {
+  const cleanQuery = `%${normalizeUsername(query)}%`;
+
+  const rows = await all(
     `
-      SELECT id, role, content, created_at
-      FROM messages
-      WHERE user_id = ?
-      ORDER BY id DESC
-      LIMIT ?
+      SELECT id, display_name, username, bio, created_at
+      FROM accounts
+      WHERE id != ? AND username LIKE ?
+      ORDER BY username ASC
+      LIMIT 12
     `,
-    [userId, limit],
-  ).then((rows) => rows.reverse());
+    [currentUserId, cleanQuery],
+  );
+
+  return rows.map(publicAccount);
+}
+
+async function saveDirectMessage({ senderId, receiverUsername, content }) {
+  const cleanContent = String(content || "").trim();
+
+  if (!cleanContent) {
+    throw new Error("Message cannot be empty.");
+  }
+
+  const sender = await getAccountById(senderId);
+  const receiver = await get(
+    `SELECT * FROM accounts WHERE username = ?`,
+    [normalizeUsername(receiverUsername)],
+  );
+
+  if (!sender) {
+    throw new Error("Sender account not found.");
+  }
+
+  if (!receiver) {
+    throw new Error("No account found with that username.");
+  }
+
+  if (sender.id === receiver.id) {
+    throw new Error("Choose another account to message.");
+  }
+
+  await run(
+    `
+      INSERT INTO direct_messages (sender_id, receiver_id, content)
+      VALUES (?, ?, ?)
+    `,
+    [sender.id, receiver.id, cleanContent],
+  );
+
+  return getConversation(sender.id, receiver.username);
+}
+
+async function getConversation(currentUserId, otherUsername) {
+  const other = await get(
+    `SELECT id, display_name, username, bio, created_at FROM accounts WHERE username = ?`,
+    [normalizeUsername(otherUsername)],
+  );
+
+  if (!other) {
+    throw new Error("No account found with that username.");
+  }
+
+  const messages = await all(
+    `
+      SELECT
+        direct_messages.id,
+        direct_messages.sender_id,
+        direct_messages.receiver_id,
+        direct_messages.content,
+        direct_messages.created_at,
+        sender.username AS sender_username,
+        receiver.username AS receiver_username
+      FROM direct_messages
+      JOIN accounts sender ON sender.id = direct_messages.sender_id
+      JOIN accounts receiver ON receiver.id = direct_messages.receiver_id
+      WHERE
+        (sender_id = ? AND receiver_id = ?)
+        OR
+        (sender_id = ? AND receiver_id = ?)
+      ORDER BY direct_messages.id ASC
+    `,
+    [currentUserId, other.id, other.id, currentUserId],
+  );
+
+  return {
+    other: publicAccount(other),
+    messages: messages.map((message) => ({
+      id: message.id,
+      fromMe: message.sender_id === Number(currentUserId),
+      senderUsername: message.sender_username,
+      receiverUsername: message.receiver_username,
+      content: message.content,
+      createdAt: message.created_at,
+    })),
+  };
+}
+
+async function getInbox(currentUserId) {
+  const rows = await all(
+    `
+      SELECT
+        account.id,
+        account.display_name,
+        account.username,
+        account.bio,
+        account.created_at,
+        latest.content AS last_message,
+        latest.created_at AS last_message_at
+      FROM (
+        SELECT
+          CASE
+            WHEN sender_id = ? THEN receiver_id
+            ELSE sender_id
+          END AS other_id,
+          MAX(id) AS message_id
+        FROM direct_messages
+        WHERE sender_id = ? OR receiver_id = ?
+        GROUP BY other_id
+      ) inbox
+      JOIN direct_messages latest ON latest.id = inbox.message_id
+      JOIN accounts account ON account.id = inbox.other_id
+      ORDER BY latest.id DESC
+    `,
+    [currentUserId, currentUserId, currentUserId],
+  );
+
+  return rows.map((row) => ({
+    account: publicAccount(row),
+    lastMessage: row.last_message,
+    lastMessageAt: row.last_message_at,
+  }));
 }
 
 module.exports = {
   initializeDatabase,
-  createOrGetUser,
-  saveMessage,
-  getMessagesForUser,
-  get,
+  createAccount,
+  loginAccount,
+  searchAccounts,
+  saveDirectMessage,
+  getConversation,
+  getInbox,
+  getAccountById,
 };

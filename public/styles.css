@@ -277,10 +277,15 @@ input:disabled {
   background: #ffffff;
 }
 
+.person-button[role="button"] {
+  cursor: pointer;
+}
+
 .person-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .person-copy strong,
@@ -295,6 +300,35 @@ input:disabled {
   border: 1px dashed var(--border);
   border-radius: 8px;
   font-size: 0.9rem;
+}
+
+.person-action,
+.person-status {
+  flex: 0 0 auto;
+  min-width: 84px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.person-action {
+  border: 0;
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.person-action:hover {
+  background: var(--accent-dark);
+}
+
+.person-status {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: #eef2f5;
 }
 
 .chat-area {

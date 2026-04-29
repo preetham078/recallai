@@ -9,6 +9,9 @@ const {
   getConversation,
   getInbox,
   getAccountById,
+  sendFriendRequest,
+  acceptFriendRequest,
+  getFriendRequests,
 } = require("./db");
 
 const app = express();
@@ -88,6 +91,58 @@ app.get("/api/inbox", async (request, response) => {
     response.json({ conversations: await getInbox(account.id) });
   } catch (error) {
     response.status(500).json({ error: "Unable to load inbox." });
+  }
+});
+
+app.get("/api/friend-requests", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    response.json(await getFriendRequests(account.id));
+  } catch (error) {
+    response.status(500).json({ error: "Unable to load friend requests." });
+  }
+});
+
+app.post("/api/friend-requests", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    const requestResult = await sendFriendRequest({
+      requesterId: account.id,
+      receiverUsername: request.body.receiverUsername,
+    });
+
+    response.status(201).json(requestResult);
+  } catch (error) {
+    response.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/friend-requests/:username/accept", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    response.json(
+      await acceptFriendRequest({
+        receiverId: account.id,
+        requesterUsername: request.params.username,
+      }),
+    );
+  } catch (error) {
+    response.status(400).json({ error: error.message });
   }
 });
 

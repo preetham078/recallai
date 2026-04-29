@@ -21,6 +21,7 @@ const closeProfileButton = document.getElementById("close-profile-button");
 const floatingCompose = document.getElementById("floating-compose");
 const searchInput = document.getElementById("search-input");
 const peopleList = document.getElementById("people-list");
+const requestsList = document.getElementById("requests-list");
 const inboxList = document.getElementById("inbox-list");
 const chatAvatar = document.getElementById("chat-avatar");
 const chatTitle = document.getElementById("chat-title");
@@ -43,11 +44,15 @@ function loadLocalData() {
     nextAccountId: 1,
     nextMessageId: 1,
     accounts: [],
+    friendRequests: [],
     messages: [],
   };
 
   try {
-    return JSON.parse(localStorage.getItem(localDataKey)) || fallback;
+    return {
+      ...fallback,
+      ...(JSON.parse(localStorage.getItem(localDataKey)) || {}),
+    };
   } catch (_error) {
     return fallback;
   }
@@ -137,6 +142,8 @@ function getLocalConversation(data, accountId, username) {
     throw new Error("No account found with that username.");
   }
 
+  requireLocalFriends(data, current.id, other.id);
+
   const messages = data.messages
     .filter(
       (message) =>
@@ -161,6 +168,38 @@ function getLocalConversation(data, accountId, username) {
     other: publicLocalAccount(other),
     messages,
   };
+}
+
+function getLocalFriendshipStatus(data, currentUserId, otherUserId) {
+  if (Number(currentUserId) === Number(otherUserId)) {
+    return "self";
+  }
+
+  const request = data.friendRequests.find(
+    (entry) =>
+      (entry.requesterId === Number(currentUserId) &&
+        entry.receiverId === Number(otherUserId)) ||
+      (entry.requesterId === Number(otherUserId) &&
+        entry.receiverId === Number(currentUserId)),
+  );
+
+  if (!request) {
+    return "none";
+  }
+
+  if (request.status === "accepted") {
+    return "friends";
+  }
+
+  return request.requesterId === Number(currentUserId)
+    ? "outgoing_pending"
+    : "incoming_pending";
+}
+
+function requireLocalFriends(data, currentUserId, otherUserId) {
+  if (getLocalFriendshipStatus(data, currentUserId, otherUserId) !== "friends") {
+    throw new Error("Friend request must be accepted before messaging.");
+  }
 }
 
 function getLocalInbox(data, accountId) {
@@ -269,7 +308,122 @@ function handleLocalRequest(url, options = {}) {
         )
         .sort((left, right) => left.username.localeCompare(right.username))
         .slice(0, 12)
-        .map(publicLocalAccount),
+        .map((account) => ({
+          ...publicLocalAccount(account),
+          friendshipStatus: getLocalFriendshipStatus(
+            data,
+            accountId,
+            account.id,
+          ),
+        })),
+    };
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/friend-requests") {
+    const accountId = Number(requestUrl.searchParams.get("accountId"));
+    const incoming = [];
+    const outgoing = [];
+
+    data.friendRequests
+      .filter(
+        (entry) =>
+          entry.status === "pending" &&
+          (entry.requesterId === accountId || entry.receiverId === accountId),
+      )
+      .forEach((entry) => {
+        if (entry.receiverId === accountId) {
+          incoming.push({
+            account: publicLocalAccount(getLocalAccount(data, entry.requesterId)),
+            friendshipStatus: "incoming_pending",
+          });
+        } else {
+          outgoing.push({
+            account: publicLocalAccount(getLocalAccount(data, entry.receiverId)),
+            friendshipStatus: "outgoing_pending",
+          });
+        }
+      });
+
+    return { incoming, outgoing };
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/friend-requests") {
+    const body = getLocalBody(options);
+    const requester = getLocalAccount(data, body.accountId);
+    const receiver = data.accounts.find(
+      (account) =>
+        account.username === normalizeLocalUsername(body.receiverUsername),
+    );
+
+    if (!requester) {
+      throw new Error("Requester account not found.");
+    }
+
+    if (!receiver) {
+      throw new Error("No account found with that username.");
+    }
+
+    if (requester.id === receiver.id) {
+      throw new Error("Choose another account.");
+    }
+
+    const status = getLocalFriendshipStatus(data, requester.id, receiver.id);
+
+    if (status === "friends") {
+      throw new Error("You are already friends.");
+    }
+
+    if (status === "incoming_pending" || status === "outgoing_pending") {
+      throw new Error("Friend request is already pending.");
+    }
+
+    data.friendRequests.push({
+      requesterId: requester.id,
+      receiverId: receiver.id,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    });
+    saveLocalData(data);
+
+    return {
+      account: publicLocalAccount(receiver),
+      friendshipStatus: "outgoing_pending",
+    };
+  }
+
+  if (
+    method === "POST" &&
+    requestUrl.pathname.startsWith("/api/friend-requests/") &&
+    requestUrl.pathname.endsWith("/accept")
+  ) {
+    const body = getLocalBody(options);
+    const username = decodeURIComponent(
+      requestUrl.pathname
+        .replace("/api/friend-requests/", "")
+        .replace("/accept", ""),
+    );
+    const receiver = getLocalAccount(data, body.accountId);
+    const requester = data.accounts.find(
+      (account) => account.username === normalizeLocalUsername(username),
+    );
+    const request = data.friendRequests.find(
+      (entry) =>
+        entry.requesterId === requester?.id &&
+        entry.receiverId === receiver?.id &&
+        entry.status === "pending",
+    );
+
+    if (!request) {
+      throw new Error("Friend request not found.");
+    }
+
+    request.status = "accepted";
+    request.updatedAt = new Date().toISOString();
+    saveLocalData(data);
+
+    return {
+      account: publicLocalAccount(requester),
+      friendshipStatus: "friends",
     };
   }
 
@@ -314,6 +468,8 @@ function handleLocalRequest(url, options = {}) {
     if (sender.id === receiver.id) {
       throw new Error("Choose another account to message.");
     }
+
+    requireLocalFriends(data, sender.id, receiver.id);
 
     if (!content) {
       throw new Error("Message cannot be empty.");
@@ -363,6 +519,7 @@ function showSignedIn(account) {
   profileName.textContent = account.displayName;
   profileUsername.textContent = `@${account.username}`;
   mobileProfileUsername.textContent = account.username;
+  loadFriendRequests();
   loadInbox();
   searchAccounts("");
 }
@@ -376,6 +533,7 @@ function showSignedOut() {
   authPanel.classList.remove("hidden");
   profilePanel.classList.add("hidden");
   peoplePanel.classList.add("hidden");
+  requestsList.innerHTML = "";
   renderMessages([]);
   setChatHeader(null);
   clearSession();
@@ -417,10 +575,9 @@ function renderAccountList(container, accounts, emptyText) {
 
   accounts.forEach((entry) => {
     const account = entry.account || entry;
-    const button = document.createElement("button");
+    const friendshipStatus = entry.friendshipStatus || account.friendshipStatus;
+    const button = document.createElement("div");
     button.className = "person-button";
-    button.type = "button";
-    button.addEventListener("click", () => openConversation(account.username));
 
     const avatar = document.createElement("span");
     avatar.className = "avatar small";
@@ -433,10 +590,52 @@ function renderAccountList(container, accounts, emptyText) {
     name.textContent = account.displayName;
 
     const detail = document.createElement("span");
-    detail.textContent = entry.lastMessage || `@${account.username}`;
+    detail.textContent = entry.detail || entry.lastMessage || `@${account.username}`;
 
     content.append(name, detail);
     button.append(avatar, content);
+
+    if (entry.lastMessage || friendshipStatus === "friends") {
+      button.addEventListener("click", () => openConversation(account.username));
+      button.tabIndex = 0;
+      button.setAttribute("role", "button");
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openConversation(account.username);
+        }
+      });
+      const action = document.createElement("span");
+      action.className = "person-status";
+      action.textContent = "Message";
+      button.appendChild(action);
+    } else if (friendshipStatus === "incoming_pending") {
+      const action = document.createElement("button");
+      action.className = "person-action";
+      action.type = "button";
+      action.textContent = "Accept";
+      action.addEventListener("click", (event) => {
+        event.stopPropagation();
+        acceptFriendRequest(account.username);
+      });
+      button.appendChild(action);
+    } else if (friendshipStatus === "outgoing_pending") {
+      const action = document.createElement("span");
+      action.className = "person-status";
+      action.textContent = "Pending";
+      button.appendChild(action);
+    } else {
+      const action = document.createElement("button");
+      action.className = "person-action";
+      action.type = "button";
+      action.textContent = "Add friend";
+      action.addEventListener("click", (event) => {
+        event.stopPropagation();
+        sendFriendRequest(account.username);
+      });
+      button.appendChild(action);
+    }
+
     container.appendChild(button);
   });
 }
@@ -451,6 +650,60 @@ async function searchAccounts(query) {
       `/api/accounts/search?${accountParams()}&q=${encodeURIComponent(query)}`,
     );
     renderAccountList(peopleList, payload.accounts, "No matching usernames yet.");
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function sendFriendRequest(username) {
+  try {
+    await fetchJson("/api/friend-requests", {
+      method: "POST",
+      body: JSON.stringify({
+        accountId: activeAccount.id,
+        receiverUsername: username,
+      }),
+    });
+    setStatus("Friend request sent.");
+    loadFriendRequests();
+    searchAccounts(searchInput.value);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function acceptFriendRequest(username) {
+  try {
+    await fetchJson(`/api/friend-requests/${encodeURIComponent(username)}/accept`, {
+      method: "POST",
+      body: JSON.stringify({
+        accountId: activeAccount.id,
+      }),
+    });
+    setStatus("Friend request accepted. You can message now.");
+    loadFriendRequests();
+    loadInbox();
+    searchAccounts(searchInput.value);
+  } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function loadFriendRequests() {
+  if (!activeAccount) {
+    return;
+  }
+
+  try {
+    const payload = await fetchJson(`/api/friend-requests?${accountParams()}`);
+    const requests = [
+      ...payload.incoming,
+      ...payload.outgoing.map((entry) => ({
+        ...entry,
+        detail: `Pending with @${entry.account.username}`,
+      })),
+    ];
+    renderAccountList(requestsList, requests, "No friend requests.");
   } catch (error) {
     setStatus(error.message);
   }
@@ -541,6 +794,8 @@ async function openConversation(username) {
     pollTimer = setInterval(() => refreshConversation(), 2500);
   } catch (error) {
     setStatus(error.message);
+    loadFriendRequests();
+    searchAccounts(searchInput.value);
   }
 }
 
@@ -555,6 +810,7 @@ async function refreshConversation() {
     );
     renderMessages(payload.messages);
     loadInbox();
+    loadFriendRequests();
   } catch (_error) {
     clearInterval(pollTimer);
   }

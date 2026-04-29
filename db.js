@@ -75,6 +75,25 @@ async function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_direct_messages_pair
     ON direct_messages(sender_id, receiver_id, id)
   `);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS friend_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requester_id INTEGER NOT NULL,
+      receiver_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(requester_id, receiver_id),
+      FOREIGN KEY(requester_id) REFERENCES accounts(id),
+      FOREIGN KEY(receiver_id) REFERENCES accounts(id)
+    )
+  `);
+
+  await run(`
+    CREATE INDEX IF NOT EXISTS idx_friend_requests_people
+    ON friend_requests(requester_id, receiver_id, status)
+  `);
 }
 
 function normalizeUsername(username) {
@@ -159,6 +178,46 @@ function getAccountById(accountId) {
   return get(`SELECT * FROM accounts WHERE id = ?`, [accountId]);
 }
 
+async function getFriendshipStatus(currentUserId, otherUserId) {
+  if (Number(currentUserId) === Number(otherUserId)) {
+    return "self";
+  }
+
+  const request = await get(
+    `
+      SELECT requester_id, receiver_id, status
+      FROM friend_requests
+      WHERE
+        (requester_id = ? AND receiver_id = ?)
+        OR
+        (requester_id = ? AND receiver_id = ?)
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [currentUserId, otherUserId, otherUserId, currentUserId],
+  );
+
+  if (!request) {
+    return "none";
+  }
+
+  if (request.status === "accepted") {
+    return "friends";
+  }
+
+  return request.requester_id === Number(currentUserId)
+    ? "outgoing_pending"
+    : "incoming_pending";
+}
+
+async function requireFriends(currentUserId, otherUserId) {
+  const status = await getFriendshipStatus(currentUserId, otherUserId);
+
+  if (status !== "friends") {
+    throw new Error("Friend request must be accepted before messaging.");
+  }
+}
+
 async function searchAccounts(query, currentUserId) {
   const cleanQuery = `%${normalizeUsername(query)}%`;
 
@@ -173,7 +232,152 @@ async function searchAccounts(query, currentUserId) {
     [currentUserId, cleanQuery],
   );
 
-  return rows.map(publicAccount);
+  return Promise.all(
+    rows.map(async (row) => ({
+      ...publicAccount(row),
+      friendshipStatus: await getFriendshipStatus(currentUserId, row.id),
+    })),
+  );
+}
+
+async function sendFriendRequest({ requesterId, receiverUsername }) {
+  const requester = await getAccountById(requesterId);
+  const receiver = await get(
+    `SELECT * FROM accounts WHERE username = ?`,
+    [normalizeUsername(receiverUsername)],
+  );
+
+  if (!requester) {
+    throw new Error("Requester account not found.");
+  }
+
+  if (!receiver) {
+    throw new Error("No account found with that username.");
+  }
+
+  if (requester.id === receiver.id) {
+    throw new Error("Choose another account.");
+  }
+
+  const existing = await get(
+    `
+      SELECT * FROM friend_requests
+      WHERE
+        (requester_id = ? AND receiver_id = ?)
+        OR
+        (requester_id = ? AND receiver_id = ?)
+      LIMIT 1
+    `,
+    [requester.id, receiver.id, receiver.id, requester.id],
+  );
+
+  if (existing?.status === "accepted") {
+    throw new Error("You are already friends.");
+  }
+
+  if (existing?.status === "pending") {
+    throw new Error("Friend request is already pending.");
+  }
+
+  await run(
+    `
+      INSERT INTO friend_requests (requester_id, receiver_id)
+      VALUES (?, ?)
+    `,
+    [requester.id, receiver.id],
+  );
+
+  return {
+    account: publicAccount(receiver),
+    friendshipStatus: "outgoing_pending",
+  };
+}
+
+async function acceptFriendRequest({ receiverId, requesterUsername }) {
+  const receiver = await getAccountById(receiverId);
+  const requester = await get(
+    `SELECT * FROM accounts WHERE username = ?`,
+    [normalizeUsername(requesterUsername)],
+  );
+
+  if (!receiver || !requester) {
+    throw new Error("Friend request not found.");
+  }
+
+  const result = await run(
+    `
+      UPDATE friend_requests
+      SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
+      WHERE requester_id = ? AND receiver_id = ? AND status = 'pending'
+    `,
+    [requester.id, receiver.id],
+  );
+
+  if (!result.changes) {
+    throw new Error("Friend request not found.");
+  }
+
+  return {
+    account: publicAccount(requester),
+    friendshipStatus: "friends",
+  };
+}
+
+async function getFriendRequests(currentUserId) {
+  const rows = await all(
+    `
+      SELECT
+        friend_requests.id,
+        friend_requests.requester_id,
+        friend_requests.receiver_id,
+        friend_requests.status,
+        friend_requests.created_at,
+        requester.display_name AS requester_display_name,
+        requester.username AS requester_username,
+        requester.bio AS requester_bio,
+        requester.created_at AS requester_created_at,
+        receiver.display_name AS receiver_display_name,
+        receiver.username AS receiver_username,
+        receiver.bio AS receiver_bio,
+        receiver.created_at AS receiver_created_at
+      FROM friend_requests
+      JOIN accounts requester ON requester.id = friend_requests.requester_id
+      JOIN accounts receiver ON receiver.id = friend_requests.receiver_id
+      WHERE
+        (requester_id = ? OR receiver_id = ?)
+        AND status = 'pending'
+      ORDER BY friend_requests.id DESC
+    `,
+    [currentUserId, currentUserId],
+  );
+
+  const incoming = [];
+  const outgoing = [];
+
+  rows.forEach((row) => {
+    const requester = publicAccount({
+      id: row.requester_id,
+      display_name: row.requester_display_name,
+      username: row.requester_username,
+      bio: row.requester_bio,
+      created_at: row.requester_created_at,
+    });
+    const receiver = publicAccount({
+      id: row.receiver_id,
+      display_name: row.receiver_display_name,
+      username: row.receiver_username,
+      bio: row.receiver_bio,
+      created_at: row.receiver_created_at,
+    });
+
+    if (row.receiver_id === Number(currentUserId)) {
+      incoming.push({ account: requester, friendshipStatus: "incoming_pending" });
+    } else {
+      outgoing.push({ account: receiver, friendshipStatus: "outgoing_pending" });
+    }
+  });
+
+  return { incoming, outgoing };
 }
 
 async function saveDirectMessage({ senderId, receiverUsername, content }) {
@@ -201,6 +405,8 @@ async function saveDirectMessage({ senderId, receiverUsername, content }) {
     throw new Error("Choose another account to message.");
   }
 
+  await requireFriends(sender.id, receiver.id);
+
   await run(
     `
       INSERT INTO direct_messages (sender_id, receiver_id, content)
@@ -221,6 +427,8 @@ async function getConversation(currentUserId, otherUsername) {
   if (!other) {
     throw new Error("No account found with that username.");
   }
+
+  await requireFriends(currentUserId, other.id);
 
   const messages = await all(
     `
@@ -302,4 +510,7 @@ module.exports = {
   getConversation,
   getInbox,
   getAccountById,
+  sendFriendRequest,
+  acceptFriendRequest,
+  getFriendRequests,
 };

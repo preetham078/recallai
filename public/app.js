@@ -35,6 +35,28 @@ let activeAccount = null;
 let activeChat = null;
 let pollTimer = null;
 
+const isStaticSite = window.location.hostname.endsWith("github.io");
+const localDataKey = "pingmeStaticData";
+
+function loadLocalData() {
+  const fallback = {
+    nextAccountId: 1,
+    nextMessageId: 1,
+    accounts: [],
+    messages: [],
+  };
+
+  try {
+    return JSON.parse(localStorage.getItem(localDataKey)) || fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function saveLocalData(data) {
+  localStorage.setItem(localDataKey, JSON.stringify(data));
+}
+
 function initials(name) {
   return String(name || "?").trim().charAt(0).toUpperCase() || "?";
 }
@@ -53,6 +75,10 @@ function setAuthMode(mode) {
 }
 
 async function fetchJson(url, options = {}) {
+  if (isStaticSite) {
+    return handleLocalRequest(url, options);
+  }
+
   const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
@@ -66,6 +92,247 @@ async function fetchJson(url, options = {}) {
   }
 
   return payload;
+}
+
+function getLocalBody(options) {
+  return options.body ? JSON.parse(options.body) : {};
+}
+
+function publicLocalAccount(account) {
+  if (!account) {
+    return null;
+  }
+
+  return {
+    id: account.id,
+    displayName: account.displayName,
+    username: account.username,
+    bio: account.bio,
+    createdAt: account.createdAt,
+  };
+}
+
+function normalizeLocalUsername(username) {
+  return String(username || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "");
+}
+
+function getLocalAccount(data, accountId) {
+  return data.accounts.find((account) => account.id === Number(accountId));
+}
+
+function getLocalConversation(data, accountId, username) {
+  const current = getLocalAccount(data, accountId);
+  const other = data.accounts.find(
+    (account) => account.username === normalizeLocalUsername(username),
+  );
+
+  if (!current) {
+    throw new Error("Sign in first.");
+  }
+
+  if (!other) {
+    throw new Error("No account found with that username.");
+  }
+
+  const messages = data.messages
+    .filter(
+      (message) =>
+        (message.senderId === current.id && message.receiverId === other.id) ||
+        (message.senderId === other.id && message.receiverId === current.id),
+    )
+    .map((message) => {
+      const sender = getLocalAccount(data, message.senderId);
+      const receiver = getLocalAccount(data, message.receiverId);
+
+      return {
+        id: message.id,
+        fromMe: message.senderId === current.id,
+        senderUsername: sender.username,
+        receiverUsername: receiver.username,
+        content: message.content,
+        createdAt: message.createdAt,
+      };
+    });
+
+  return {
+    other: publicLocalAccount(other),
+    messages,
+  };
+}
+
+function getLocalInbox(data, accountId) {
+  const current = getLocalAccount(data, accountId);
+
+  if (!current) {
+    throw new Error("Sign in first.");
+  }
+
+  const conversations = new Map();
+
+  data.messages
+    .filter(
+      (message) =>
+        message.senderId === current.id || message.receiverId === current.id,
+    )
+    .forEach((message) => {
+      const otherId =
+        message.senderId === current.id ? message.receiverId : message.senderId;
+      const other = getLocalAccount(data, otherId);
+
+      if (other) {
+        conversations.set(other.id, {
+          account: publicLocalAccount(other),
+          lastMessage: message.content,
+          lastMessageAt: message.createdAt,
+        });
+      }
+    });
+
+  return [...conversations.values()].sort((left, right) =>
+    right.lastMessageAt.localeCompare(left.lastMessageAt),
+  );
+}
+
+function handleLocalRequest(url, options = {}) {
+  const requestUrl = new URL(url, window.location.origin);
+  const method = options.method || "GET";
+  const data = loadLocalData();
+
+  if (method === "POST" && requestUrl.pathname === "/api/accounts") {
+    const body = getLocalBody(options);
+    const displayName = String(body.displayName || "").trim();
+    const username = normalizeLocalUsername(body.username);
+    const password = String(body.password || "");
+    const bio = String(body.bio || "").trim();
+
+    if (!displayName || !username || !password) {
+      throw new Error("Name, username, and password are required.");
+    }
+
+    if (!/^[a-z0-9._]{3,20}$/.test(username)) {
+      throw new Error(
+        "Username must be 3-20 characters and use letters, numbers, dots, or underscores.",
+      );
+    }
+
+    if (password.length < 4) {
+      throw new Error("Password must be at least 4 characters.");
+    }
+
+    if (data.accounts.some((account) => account.username === username)) {
+      throw new Error("That username is already taken.");
+    }
+
+    const account = {
+      id: data.nextAccountId,
+      displayName,
+      username,
+      password,
+      bio,
+      createdAt: new Date().toISOString(),
+    };
+
+    data.nextAccountId += 1;
+    data.accounts.push(account);
+    saveLocalData(data);
+
+    return { account: publicLocalAccount(account) };
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/login") {
+    const body = getLocalBody(options);
+    const username = normalizeLocalUsername(body.username);
+    const password = String(body.password || "");
+    const account = data.accounts.find(
+      (entry) => entry.username === username && entry.password === password,
+    );
+
+    if (!account) {
+      throw new Error("Username or password is incorrect.");
+    }
+
+    return { account: publicLocalAccount(account) };
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/accounts/search") {
+    const accountId = Number(requestUrl.searchParams.get("accountId"));
+    const query = normalizeLocalUsername(requestUrl.searchParams.get("q"));
+
+    return {
+      accounts: data.accounts
+        .filter(
+          (account) =>
+            account.id !== accountId && account.username.includes(query),
+        )
+        .sort((left, right) => left.username.localeCompare(right.username))
+        .slice(0, 12)
+        .map(publicLocalAccount),
+    };
+  }
+
+  if (method === "GET" && requestUrl.pathname === "/api/inbox") {
+    return {
+      conversations: getLocalInbox(
+        data,
+        Number(requestUrl.searchParams.get("accountId")),
+      ),
+    };
+  }
+
+  if (method === "GET" && requestUrl.pathname.startsWith("/api/messages/")) {
+    const username = decodeURIComponent(
+      requestUrl.pathname.replace("/api/messages/", ""),
+    );
+
+    return getLocalConversation(
+      data,
+      Number(requestUrl.searchParams.get("accountId")),
+      username,
+    );
+  }
+
+  if (method === "POST" && requestUrl.pathname === "/api/messages") {
+    const body = getLocalBody(options);
+    const sender = getLocalAccount(data, body.accountId);
+    const receiver = data.accounts.find(
+      (account) =>
+        account.username === normalizeLocalUsername(body.receiverUsername),
+    );
+    const content = String(body.content || "").trim();
+
+    if (!sender) {
+      throw new Error("Sender account not found.");
+    }
+
+    if (!receiver) {
+      throw new Error("No account found with that username.");
+    }
+
+    if (sender.id === receiver.id) {
+      throw new Error("Choose another account to message.");
+    }
+
+    if (!content) {
+      throw new Error("Message cannot be empty.");
+    }
+
+    data.messages.push({
+      id: data.nextMessageId,
+      senderId: sender.id,
+      receiverId: receiver.id,
+      content,
+      createdAt: new Date().toISOString(),
+    });
+    data.nextMessageId += 1;
+    saveLocalData(data);
+
+    return getLocalConversation(data, sender.id, receiver.username);
+  }
+
+  throw new Error("This action is not available on the static site.");
 }
 
 function saveSession(account) {

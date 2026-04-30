@@ -178,6 +178,27 @@ function getAccountById(accountId) {
   return get(`SELECT * FROM accounts WHERE id = ?`, [accountId]);
 }
 
+async function updateAccount(accountId, { displayName, bio = "" }) {
+  const cleanDisplayName = String(displayName || "").trim();
+  const cleanBio = String(bio || "").trim();
+
+  if (!cleanDisplayName) {
+    throw new Error("Name is required.");
+  }
+
+  await run(
+    `
+      UPDATE accounts
+      SET display_name = ?, bio = ?
+      WHERE id = ?
+    `,
+    [cleanDisplayName, cleanBio, accountId],
+  );
+
+  const account = await getAccountById(accountId);
+  return publicAccount(account);
+}
+
 async function getFriendshipStatus(currentUserId, otherUserId) {
   if (Number(currentUserId) === Number(otherUserId)) {
     return "self";
@@ -501,14 +522,72 @@ async function getInbox(currentUserId) {
   }));
 }
 
+async function getProfile(currentUserId) {
+  const account = await getAccountById(currentUserId);
+
+  if (!account) {
+    throw new Error("Account not found.");
+  }
+
+  const stats = await get(
+    `
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM friend_requests
+          WHERE status = 'accepted'
+            AND (requester_id = ? OR receiver_id = ?)
+        ) AS friends,
+        (
+          SELECT COUNT(*)
+          FROM (
+            SELECT
+              CASE
+                WHEN sender_id = ? THEN receiver_id
+                ELSE sender_id
+              END AS other_id
+            FROM direct_messages
+            WHERE sender_id = ? OR receiver_id = ?
+            GROUP BY other_id
+          )
+        ) AS chats,
+        (
+          SELECT COUNT(*)
+          FROM direct_messages
+          WHERE sender_id = ? OR receiver_id = ?
+        ) AS messages
+    `,
+    [
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+    ],
+  );
+
+  return {
+    account: publicAccount(account),
+    stats: {
+      friends: stats.friends || 0,
+      chats: stats.chats || 0,
+      messages: stats.messages || 0,
+    },
+  };
+}
+
 module.exports = {
   initializeDatabase,
   createAccount,
   loginAccount,
+  updateAccount,
   searchAccounts,
   saveDirectMessage,
   getConversation,
   getInbox,
+  getProfile,
   getAccountById,
   sendFriendRequest,
   acceptFriendRequest,

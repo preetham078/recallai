@@ -8,6 +8,21 @@ const peoplePanel = document.getElementById("people-panel");
 const profileAvatar = document.getElementById("profile-avatar");
 const profileName = document.getElementById("profile-name");
 const profileUsername = document.getElementById("profile-username");
+const profileBio = document.getElementById("profile-bio");
+const profileJoined = document.getElementById("profile-joined");
+const profileFriends = document.getElementById("profile-friends");
+const profileChats = document.getElementById("profile-chats");
+const profileMessages = document.getElementById("profile-messages");
+const editProfileButton = document.getElementById("edit-profile-button");
+const shareProfileButton = document.getElementById("share-profile-button");
+const profileForm = document.getElementById("profile-form");
+const profileDisplayNameInput = document.getElementById(
+  "profile-display-name-input",
+);
+const profileBioInput = document.getElementById("profile-bio-input");
+const cancelProfileEditButton = document.getElementById(
+  "cancel-profile-edit-button",
+);
 const mobileProfileUsername = document.getElementById("mobile-profile-username");
 const logoutButton = document.getElementById("logout-button");
 const backButton = document.getElementById("back-button");
@@ -64,6 +79,41 @@ function saveLocalData(data) {
 
 function initials(name) {
   return String(name || "?").trim().charAt(0).toUpperCase() || "?";
+}
+
+function formatJoinedDate(value) {
+  const date = new Date(String(value || "").replace(" ", "T"));
+
+  if (Number.isNaN(date.getTime())) {
+    return "Joined recently";
+  }
+
+  return `Joined ${date.toLocaleDateString(undefined, {
+    month: "short",
+    year: "numeric",
+  })}`;
+}
+
+function copyText(text) {
+  if (navigator.clipboard) {
+    return navigator.clipboard.writeText(text);
+  }
+
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.top = "-1000px";
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+
+  if (!copied) {
+    throw new Error("Copy failed.");
+  }
+
+  return Promise.resolve();
 }
 
 function setStatus(message) {
@@ -296,6 +346,72 @@ function handleLocalRequest(url, options = {}) {
     return { account: publicLocalAccount(account) };
   }
 
+  if (method === "GET" && requestUrl.pathname === "/api/profile") {
+    const accountId = Number(requestUrl.searchParams.get("accountId"));
+    const account = getLocalAccount(data, accountId);
+
+    if (!account) {
+      throw new Error("Account not found. Sign in again.");
+    }
+
+    const friendIds = new Set();
+    data.friendRequests
+      .filter(
+        (entry) =>
+          entry.status === "accepted" &&
+          (entry.requesterId === accountId || entry.receiverId === accountId),
+      )
+      .forEach((entry) => {
+        friendIds.add(
+          entry.requesterId === accountId ? entry.receiverId : entry.requesterId,
+        );
+      });
+
+    const chatIds = new Set();
+    const messageCount = data.messages.filter((message) => {
+      const isMine =
+        message.senderId === accountId || message.receiverId === accountId;
+
+      if (isMine) {
+        chatIds.add(
+          message.senderId === accountId ? message.receiverId : message.senderId,
+        );
+      }
+
+      return isMine;
+    }).length;
+
+    return {
+      account: publicLocalAccount(account),
+      stats: {
+        friends: friendIds.size,
+        chats: chatIds.size,
+        messages: messageCount,
+      },
+    };
+  }
+
+  if (method === "PATCH" && requestUrl.pathname === "/api/profile") {
+    const body = getLocalBody(options);
+    const account = getLocalAccount(data, body.accountId);
+    const displayName = String(body.displayName || "").trim();
+    const bio = String(body.bio || "").trim();
+
+    if (!account) {
+      throw new Error("Account not found. Sign in again.");
+    }
+
+    if (!displayName) {
+      throw new Error("Name is required.");
+    }
+
+    account.displayName = displayName;
+    account.bio = bio;
+    saveLocalData(data);
+
+    return handleLocalRequest(`/api/profile?accountId=${account.id}`);
+  }
+
   if (method === "GET" && requestUrl.pathname === "/api/accounts/search") {
     const accountId = Number(requestUrl.searchParams.get("accountId"));
     const query = normalizeLocalUsername(requestUrl.searchParams.get("q"));
@@ -514,11 +630,10 @@ function showSignedIn(account) {
   setMobileSlide("messages");
   authPanel.classList.add("hidden");
   profilePanel.classList.remove("hidden");
+  profilePanel.setAttribute("aria-hidden", "false");
   peoplePanel.classList.remove("hidden");
-  profileAvatar.textContent = initials(account.displayName);
-  profileName.textContent = account.displayName;
-  profileUsername.textContent = `@${account.username}`;
-  mobileProfileUsername.textContent = account.username;
+  renderProfile({ account });
+  loadProfile();
   loadFriendRequests();
   loadInbox();
   searchAccounts("");
@@ -532,7 +647,9 @@ function showSignedOut() {
   clearInterval(pollTimer);
   authPanel.classList.remove("hidden");
   profilePanel.classList.add("hidden");
+  profilePanel.setAttribute("aria-hidden", "true");
   peoplePanel.classList.add("hidden");
+  profileForm.classList.add("hidden");
   requestsList.innerHTML = "";
   renderMessages([]);
   setChatHeader(null);
@@ -541,6 +658,35 @@ function showSignedOut() {
 
 function accountParams() {
   return new URLSearchParams({ accountId: activeAccount.id });
+}
+
+function renderProfile({ account, stats = {} }) {
+  activeAccount = account;
+  saveSession(account);
+  profileAvatar.textContent = initials(account.displayName);
+  profileName.textContent = account.displayName;
+  profileUsername.textContent = `@${account.username}`;
+  profileBio.textContent = account.bio || "No bio yet.";
+  profileJoined.textContent = formatJoinedDate(account.createdAt);
+  profileFriends.textContent = stats.friends || 0;
+  profileChats.textContent = stats.chats || 0;
+  profileMessages.textContent = stats.messages || 0;
+  mobileProfileUsername.textContent = `@${account.username}`;
+  profileDisplayNameInput.value = account.displayName;
+  profileBioInput.value = account.bio || "";
+}
+
+async function loadProfile() {
+  if (!activeAccount) {
+    return;
+  }
+
+  try {
+    const payload = await fetchJson(`/api/profile?${accountParams()}`);
+    renderProfile(payload);
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 async function handleAuth(endpoint, form) {
@@ -666,6 +812,7 @@ async function sendFriendRequest(username) {
     });
     setStatus("Friend request sent.");
     loadFriendRequests();
+    loadProfile();
     searchAccounts(searchInput.value);
   } catch (error) {
     setStatus(error.message);
@@ -683,6 +830,7 @@ async function acceptFriendRequest(username) {
     setStatus("Friend request accepted. You can message now.");
     loadFriendRequests();
     loadInbox();
+    loadProfile();
     searchAccounts(searchInput.value);
   } catch (error) {
     setStatus(error.message);
@@ -717,8 +865,50 @@ async function loadInbox() {
   try {
     const payload = await fetchJson(`/api/inbox?${accountParams()}`);
     renderAccountList(inboxList, payload.conversations, "No chats yet.");
+    loadProfile();
   } catch (error) {
     setStatus(error.message);
+  }
+}
+
+function openProfileEditor() {
+  if (!activeAccount) {
+    return;
+  }
+
+  profileDisplayNameInput.value = activeAccount.displayName;
+  profileBioInput.value = activeAccount.bio || "";
+  profileForm.classList.remove("hidden");
+  profileDisplayNameInput.focus();
+}
+
+async function shareProfile() {
+  if (!activeAccount) {
+    return;
+  }
+
+  const profileUrl = `${window.location.origin}${window.location.pathname}?user=${encodeURIComponent(
+    activeAccount.username,
+  )}`;
+  const text = `Ping me on WhatsChat: @${activeAccount.username}`;
+
+  try {
+    if (navigator.share) {
+      await navigator.share({
+        title: `${activeAccount.displayName} on WhatsChat`,
+        text,
+        url: profileUrl,
+      });
+      setStatus("Profile shared.");
+      return;
+    }
+
+    await copyText(`${text} ${profileUrl}`);
+    setStatus("Profile link copied.");
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      setStatus("Unable to share profile.");
+    }
   }
 }
 
@@ -829,6 +1019,11 @@ loginForm.addEventListener("submit", (event) => {
 showSignup.addEventListener("click", () => setAuthMode("signup"));
 showLogin.addEventListener("click", () => setAuthMode("login"));
 logoutButton.addEventListener("click", showSignedOut);
+editProfileButton.addEventListener("click", openProfileEditor);
+shareProfileButton.addEventListener("click", shareProfile);
+cancelProfileEditButton.addEventListener("click", () => {
+  profileForm.classList.add("hidden");
+});
 navHome.addEventListener("click", () => setMobileSlide("messages"));
 navSearch.addEventListener("click", () => {
   setMobileSlide("messages");
@@ -853,6 +1048,39 @@ backButton.addEventListener("click", () => {
 
 searchInput.addEventListener("input", () => {
   searchAccounts(searchInput.value);
+});
+
+profileForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const formData = new FormData(profileForm);
+  const body = Object.fromEntries(formData.entries());
+  profileForm
+    .querySelectorAll("button, input, textarea")
+    .forEach((element) => {
+      element.disabled = true;
+    });
+
+  try {
+    const payload = await fetchJson("/api/profile", {
+      method: "PATCH",
+      body: JSON.stringify({
+        accountId: activeAccount.id,
+        ...body,
+      }),
+    });
+    renderProfile(payload);
+    profileForm.classList.add("hidden");
+    setStatus("Profile updated.");
+  } catch (error) {
+    setStatus(error.message);
+  } finally {
+    profileForm
+      .querySelectorAll("button, input, textarea")
+      .forEach((element) => {
+        element.disabled = false;
+      });
+  }
 });
 
 messageForm.addEventListener("submit", async (event) => {
@@ -884,6 +1112,7 @@ messageForm.addEventListener("submit", async (event) => {
     messageInput.value = "";
     renderMessages(payload.messages);
     loadInbox();
+    loadProfile();
     setStatus("");
   } catch (error) {
     setStatus(error.message);

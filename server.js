@@ -4,10 +4,12 @@ const {
   initializeDatabase,
   createAccount,
   loginAccount,
+  updateAccount,
   searchAccounts,
   saveDirectMessage,
   getConversation,
   getInbox,
+  getProfile,
   getAccountById,
   sendFriendRequest,
   acceptFriendRequest,
@@ -16,6 +18,7 @@ const {
 
 const app = express();
 const port = process.env.PORT || 3000;
+let server;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -62,6 +65,35 @@ app.post("/api/login", async (request, response) => {
     response.json({ account });
   } catch (error) {
     response.status(401).json({ error: error.message });
+  }
+});
+
+app.get("/api/profile", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    response.json(await getProfile(account.id));
+  } catch (error) {
+    response.status(500).json({ error: "Unable to load profile." });
+  }
+});
+
+app.patch("/api/profile", async (request, response) => {
+  try {
+    const account = await requireAccount(request, response);
+
+    if (!account) {
+      return;
+    }
+
+    const updatedAccount = await updateAccount(account.id, request.body || {});
+    response.json(await getProfile(updatedAccount.id));
+  } catch (error) {
+    response.status(400).json({ error: error.message });
   }
 });
 
@@ -182,7 +214,7 @@ app.post("/api/messages", async (request, response) => {
 
 initializeDatabase()
   .then(() => {
-    app.listen(port, () => {
+    server = app.listen(port, () => {
       console.log(`Server running on http://localhost:${port}`);
     });
   })

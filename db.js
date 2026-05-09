@@ -1,13 +1,61 @@
 const crypto = require("crypto");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require("pg");
 
 const dbPath = path.join(__dirname, "data.sqlite");
-const db = new sqlite3.Database(dbPath);
+const sqlite = new sqlite3.Database(dbPath);
+const postgresUrl =
+  process.env.SUPABASE_DB_URL ||
+  process.env.SUPABASE_DATABASE_URL ||
+  process.env.DATABASE_URL ||
+  "";
+const usePostgres = Boolean(postgresUrl);
 
-function run(sql, params = []) {
+const postgres = usePostgres
+  ? new Pool({
+      connectionString: postgresUrl,
+      ssl:
+        process.env.PGSSLMODE === "disable" ||
+        /localhost|127\.0\.0\.1/.test(postgresUrl)
+          ? false
+          : { rejectUnauthorized: false },
+    })
+  : null;
+
+function toPostgresSql(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => {
+    index += 1;
+    return `$${index}`;
+  });
+}
+
+function normalizeWriteSql(sql) {
+  const trimmed = sql.trim();
+
+  if (/^INSERT\s+INTO/i.test(trimmed) && !/\bRETURNING\b/i.test(trimmed)) {
+    return `${trimmed} RETURNING id`;
+  }
+
+  return trimmed;
+}
+
+async function run(sql, params = []) {
+  if (usePostgres) {
+    const result = await postgres.query(
+      toPostgresSql(normalizeWriteSql(sql)),
+      params,
+    );
+
+    return {
+      id: result.rows[0]?.id || null,
+      changes: result.rowCount || 0,
+    };
+  }
+
   return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(error) {
+    sqlite.run(sql, params, function onRun(error) {
       if (error) {
         reject(error);
         return;
@@ -21,9 +69,14 @@ function run(sql, params = []) {
   });
 }
 
-function get(sql, params = []) {
+async function get(sql, params = []) {
+  if (usePostgres) {
+    const result = await postgres.query(toPostgresSql(sql), params);
+    return result.rows[0];
+  }
+
   return new Promise((resolve, reject) => {
-    db.get(sql, params, (error, row) => {
+    sqlite.get(sql, params, (error, row) => {
       if (error) {
         reject(error);
         return;
@@ -34,9 +87,14 @@ function get(sql, params = []) {
   });
 }
 
-function all(sql, params = []) {
+async function all(sql, params = []) {
+  if (usePostgres) {
+    const result = await postgres.query(toPostgresSql(sql), params);
+    return result.rows;
+  }
+
   return new Promise((resolve, reject) => {
-    db.all(sql, params, (error, rows) => {
+    sqlite.all(sql, params, (error, rows) => {
       if (error) {
         reject(error);
         return;
@@ -48,6 +106,53 @@ function all(sql, params = []) {
 }
 
 async function initializeDatabase() {
+  if (usePostgres) {
+    await run(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id BIGSERIAL PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        bio TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await run(`
+      CREATE TABLE IF NOT EXISTS direct_messages (
+        id BIGSERIAL PRIMARY KEY,
+        sender_id BIGINT NOT NULL REFERENCES accounts(id),
+        receiver_id BIGINT NOT NULL REFERENCES accounts(id),
+        content TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await run(`
+      CREATE INDEX IF NOT EXISTS idx_direct_messages_pair
+      ON direct_messages(sender_id, receiver_id, id)
+    `);
+
+    await run(`
+      CREATE TABLE IF NOT EXISTS friend_requests (
+        id BIGSERIAL PRIMARY KEY,
+        requester_id BIGINT NOT NULL REFERENCES accounts(id),
+        receiver_id BIGINT NOT NULL REFERENCES accounts(id),
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(requester_id, receiver_id)
+      )
+    `);
+
+    await run(`
+      CREATE INDEX IF NOT EXISTS idx_friend_requests_people
+      ON friend_requests(requester_id, receiver_id, status)
+    `);
+
+    return;
+  }
+
   await run(`
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +218,7 @@ function publicAccount(account) {
   }
 
   return {
-    id: account.id,
+    id: Number(account.id),
     displayName: account.display_name,
     username: account.username,
     bio: account.bio,
@@ -226,7 +331,7 @@ async function getFriendshipStatus(currentUserId, otherUserId) {
     return "friends";
   }
 
-  return request.requester_id === Number(currentUserId)
+  return Number(request.requester_id) === Number(currentUserId)
     ? "outgoing_pending"
     : "incoming_pending";
 }
@@ -276,7 +381,7 @@ async function sendFriendRequest({ requesterId, receiverUsername }) {
     throw new Error("No account found with that username.");
   }
 
-  if (requester.id === receiver.id) {
+  if (Number(requester.id) === Number(receiver.id)) {
     throw new Error("Choose another account.");
   }
 
@@ -391,7 +496,7 @@ async function getFriendRequests(currentUserId) {
       created_at: row.receiver_created_at,
     });
 
-    if (row.receiver_id === Number(currentUserId)) {
+    if (Number(row.receiver_id) === Number(currentUserId)) {
       incoming.push({ account: requester, friendshipStatus: "incoming_pending" });
     } else {
       outgoing.push({ account: receiver, friendshipStatus: "outgoing_pending" });
@@ -422,7 +527,7 @@ async function saveDirectMessage({ senderId, receiverUsername, content }) {
     throw new Error("No account found with that username.");
   }
 
-  if (sender.id === receiver.id) {
+  if (Number(sender.id) === Number(receiver.id)) {
     throw new Error("Choose another account to message.");
   }
 
@@ -476,8 +581,8 @@ async function getConversation(currentUserId, otherUsername) {
   return {
     other: publicAccount(other),
     messages: messages.map((message) => ({
-      id: message.id,
-      fromMe: message.sender_id === Number(currentUserId),
+      id: Number(message.id),
+      fromMe: Number(message.sender_id) === Number(currentUserId),
       senderUsername: message.sender_username,
       receiverUsername: message.receiver_username,
       content: message.content,
@@ -549,7 +654,7 @@ async function getProfile(currentUserId) {
             FROM direct_messages
             WHERE sender_id = ? OR receiver_id = ?
             GROUP BY other_id
-          )
+          ) chats
         ) AS chats,
         (
           SELECT COUNT(*)
@@ -571,9 +676,9 @@ async function getProfile(currentUserId) {
   return {
     account: publicAccount(account),
     stats: {
-      friends: stats.friends || 0,
-      chats: stats.chats || 0,
-      messages: stats.messages || 0,
+      friends: Number(stats.friends || 0),
+      chats: Number(stats.chats || 0),
+      messages: Number(stats.messages || 0),
     },
   };
 }

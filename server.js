@@ -19,6 +19,30 @@ const {
 const app = express();
 const port = process.env.PORT || 3000;
 let server;
+const storageProvider =
+  process.env.SUPABASE_DB_URL ||
+  process.env.SUPABASE_DATABASE_URL ||
+  process.env.DATABASE_URL
+    ? "Supabase/Postgres"
+    : "SQLite";
+
+app.use((request, response, next) => {
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || "*";
+
+  response.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PATCH,OPTIONS",
+  );
+
+  if (request.method === "OPTIONS") {
+    response.status(204).end();
+    return;
+  }
+
+  next();
+});
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -215,7 +239,9 @@ app.post("/api/messages", async (request, response) => {
 initializeDatabase()
   .then(() => {
     server = app.listen(port, () => {
-      console.log(`Server running on http://localhost:${port}`);
+      console.log(
+        `Server running on http://localhost:${port} using ${storageProvider}`,
+      );
     });
   })
   .catch((error) => {

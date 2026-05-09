@@ -31,9 +31,11 @@ const navSearch = document.getElementById("nav-search");
 const navCreate = document.getElementById("nav-create");
 const navMessages = document.getElementById("nav-messages");
 const navProfile = document.getElementById("nav-profile");
+const topSearchButton = document.getElementById("top-search-button");
 const openProfileButton = document.getElementById("open-profile-button");
 const closeProfileButton = document.getElementById("close-profile-button");
 const floatingCompose = document.getElementById("floating-compose");
+const peopleTabs = document.querySelectorAll("[data-people-tab]");
 const searchInput = document.getElementById("search-input");
 const peopleList = document.getElementById("people-list");
 const requestsList = document.getElementById("requests-list");
@@ -50,9 +52,42 @@ const statusElement = document.getElementById("status");
 let activeAccount = null;
 let activeChat = null;
 let pollTimer = null;
+let activePeopleTab = "chats";
 
 const isStaticSite = window.location.hostname.endsWith("github.io");
 const localDataKey = "pingmeStaticData";
+const apiBaseKey = "pingmeApiBase";
+const apiParam = new URLSearchParams(window.location.search).get("api");
+const configuredApiBase =
+  typeof window.PINGME_API_BASE === "string" ? window.PINGME_API_BASE : "";
+
+function normalizeApiBase(value) {
+  const cleanValue = String(value || "").trim();
+
+  if (!cleanValue) {
+    return "";
+  }
+
+  return cleanValue.replace(/\/+$/, "");
+}
+
+const remoteApiBase = (() => {
+  const fromQuery = normalizeApiBase(apiParam);
+
+  if (fromQuery) {
+    localStorage.setItem(apiBaseKey, fromQuery);
+    return fromQuery;
+  }
+
+  const fromConfig = normalizeApiBase(configuredApiBase);
+
+  if (fromConfig) {
+    localStorage.setItem(apiBaseKey, fromConfig);
+    return fromConfig;
+  }
+
+  return normalizeApiBase(localStorage.getItem(apiBaseKey));
+})();
 
 function loadLocalData() {
   const fallback = {
@@ -130,11 +165,14 @@ function setAuthMode(mode) {
 }
 
 async function fetchJson(url, options = {}) {
-  if (isStaticSite) {
+  if (isStaticSite && !remoteApiBase) {
     return handleLocalRequest(url, options);
   }
 
-  const response = await fetch(url, {
+  const requestUrl = remoteApiBase
+    ? `${remoteApiBase}${url.startsWith("/") ? url : `/${url}`}`
+    : url;
+  const response = await fetch(requestUrl, {
     headers: {
       "Content-Type": "application/json",
     },
@@ -621,6 +659,36 @@ function setMobileSlide(slide) {
   document.body.classList.toggle("messages-slide", !showProfile);
   navProfile.classList.toggle("active", showProfile);
   navMessages.classList.toggle("active", !showProfile);
+
+  if (!showProfile) {
+    setPeopleTab(activePeopleTab);
+  }
+}
+
+function setPeopleTab(tab) {
+  activePeopleTab = tab;
+  document.body.classList.toggle("people-tab-chats", tab === "chats");
+  document.body.classList.toggle("people-tab-requests", tab === "requests");
+  document.body.classList.toggle("people-tab-add", tab === "add");
+  peopleTabs.forEach((button) => {
+    button.classList.toggle("active", button.dataset.peopleTab === tab);
+  });
+  navHome.classList.remove("active");
+  navMessages.classList.toggle("active", tab === "chats");
+  navSearch.classList.toggle("active", tab === "add");
+  navCreate.classList.toggle("active", tab === "add");
+
+  if (tab === "add") {
+    searchAccounts(searchInput.value);
+  }
+
+  if (tab === "requests") {
+    loadFriendRequests();
+  }
+
+  if (tab === "chats") {
+    loadInbox();
+  }
 }
 
 function showSignedIn(account) {
@@ -644,6 +712,7 @@ function showSignedOut() {
   activeChat = null;
   document.body.classList.remove("signed-in", "chat-open");
   setMobileSlide("messages");
+  setPeopleTab("chats");
   clearInterval(pollTimer);
   authPanel.classList.remove("hidden");
   profilePanel.classList.add("hidden");
@@ -1024,18 +1093,41 @@ shareProfileButton.addEventListener("click", shareProfile);
 cancelProfileEditButton.addEventListener("click", () => {
   profileForm.classList.add("hidden");
 });
-navHome.addEventListener("click", () => setMobileSlide("messages"));
+peopleTabs.forEach((button) => {
+  button.addEventListener("click", () => {
+    setMobileSlide("messages");
+    setPeopleTab(button.dataset.peopleTab);
+  });
+});
+navHome.addEventListener("click", () => {
+  setMobileSlide("messages");
+  setPeopleTab("chats");
+});
 navSearch.addEventListener("click", () => {
   setMobileSlide("messages");
+  setPeopleTab("add");
   searchInput.focus();
 });
-navCreate.addEventListener("click", () => setMobileSlide("messages"));
-navMessages.addEventListener("click", () => setMobileSlide("messages"));
+navCreate.addEventListener("click", () => {
+  setMobileSlide("messages");
+  setPeopleTab("add");
+  searchInput.focus();
+});
+navMessages.addEventListener("click", () => {
+  setMobileSlide("messages");
+  setPeopleTab("chats");
+});
 navProfile.addEventListener("click", () => setMobileSlide("profile"));
+topSearchButton.addEventListener("click", () => {
+  setMobileSlide("messages");
+  setPeopleTab("add");
+  searchInput.focus();
+});
 openProfileButton.addEventListener("click", () => setMobileSlide("profile"));
 closeProfileButton.addEventListener("click", () => setMobileSlide("messages"));
 floatingCompose.addEventListener("click", () => {
   setMobileSlide("messages");
+  setPeopleTab("add");
   searchInput.focus();
 });
 backButton.addEventListener("click", () => {
@@ -1133,4 +1225,10 @@ if (savedAccount) {
   }
 } else {
   showSignedOut();
+}
+
+if (isStaticSite && !remoteApiBase) {
+  setStatus(
+    "This build is using phone-only storage. Add ?api=https://your-server-url to share accounts and messages across devices.",
+  );
 }

@@ -308,6 +308,16 @@ textarea:disabled {
   gap: 8px;
 }
 
+.people-section {
+  display: none;
+}
+
+body.people-tab-chats #chats-section,
+body.people-tab-requests #requests-section,
+body.people-tab-add #add-friends-section {
+  display: grid;
+}
+
 .person-button {
   display: flex;
   align-items: center;
@@ -1409,6 +1419,16 @@ body {
   height: 24px;
 }
 
+.icon-search-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
 .icon-search::before {
   content: "";
   position: absolute;
@@ -1464,6 +1484,11 @@ body {
 .wa-tabs button.active {
   color: #ffffff;
   border-bottom-color: #ffffff;
+}
+
+.wa-tabs button {
+  font-size: 0.82rem;
+  text-transform: none;
 }
 
 .profile-panel,
@@ -1841,6 +1866,11 @@ body:not(.signed-in) .floating-compose {
   .wa-tabs button.active {
     color: #ffffff;
     border-bottom-color: #ffffff;
+  }
+
+  .wa-tabs button {
+    font-size: 0.82rem;
+    text-transform: none;
   }
 
   .auth-panel {

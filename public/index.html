@@ -18,16 +18,18 @@
         <div class="mobile-topbar" aria-label="Mobile app bar">
           <h1>WhatsChat</h1>
           <div class="topbar-actions">
-            <span class="icon-search"></span>
+            <button id="top-search-button" class="icon-search-button" type="button" aria-label="Add friends">
+              <span class="icon-search"></span>
+            </button>
             <button id="open-profile-button" class="icon-menu-button-top" type="button" aria-label="Open profile">
               <span class="icon-menu"></span>
             </button>
           </div>
         </div>
-        <div class="wa-tabs" aria-label="Mobile sections">
-          <button class="active" type="button">Chats</button>
-          <button type="button">Status</button>
-          <button type="button">Calls</button>
+        <div class="wa-tabs" aria-label="Messaging sections">
+          <button id="tab-chats" class="active" type="button" data-people-tab="chats">Chats</button>
+          <button id="tab-requests" type="button" data-people-tab="requests">Requests</button>
+          <button id="tab-add-friends" type="button" data-people-tab="add">Add Friends</button>
         </div>
 
         <div class="brand-row">
@@ -147,15 +149,21 @@
         </section>
 
         <section id="people-panel" class="people-panel hidden">
-          <label class="search-label">
-            Message by username
-            <input id="search-input" placeholder="Search @username" />
-          </label>
-          <div id="people-list" class="people-list"></div>
-          <h2 class="section-title">Friend requests</h2>
-          <div id="requests-list" class="people-list"></div>
-          <h2 class="section-title">Chats</h2>
-          <div id="inbox-list" class="people-list"></div>
+          <div id="chats-section" class="people-section" data-section="chats">
+            <h2 class="section-title">Chats</h2>
+            <div id="inbox-list" class="people-list"></div>
+          </div>
+          <div id="requests-section" class="people-section" data-section="requests">
+            <h2 class="section-title">Friend requests</h2>
+            <div id="requests-list" class="people-list"></div>
+          </div>
+          <div id="add-friends-section" class="people-section" data-section="add">
+            <label class="search-label">
+              Add friends by username
+              <input id="search-input" placeholder="Search @username" />
+            </label>
+            <div id="people-list" class="people-list"></div>
+          </div>
         </section>
       </aside>
 
@@ -199,6 +207,7 @@
       </button>
     </main>
 
-    <script src="./app.js?v=friends-1"></script>
+    <script src="./config.js"></script>
+    <script src="./app.js?v=sections-1"></script>
   </body>
 </html>

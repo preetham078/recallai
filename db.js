@@ -1,16 +1,20 @@
 const crypto = require("crypto");
 const path = require("path");
-const sqlite3 = require("sqlite3").verbose();
 const { Pool } = require("pg");
 
-const dbPath = path.join(__dirname, "data.sqlite");
-const sqlite = new sqlite3.Database(dbPath);
 const postgresUrl =
   process.env.SUPABASE_DB_URL ||
   process.env.SUPABASE_DATABASE_URL ||
   process.env.DATABASE_URL ||
   "";
 const usePostgres = Boolean(postgresUrl);
+const dbPath = path.join(__dirname, "data.sqlite");
+let sqlite = null;
+
+if (!usePostgres) {
+  const sqlite3 = require("sqlite3").verbose();
+  sqlite = new sqlite3.Database(dbPath);
+}
 
 const postgres = usePostgres
   ? new Pool({

@@ -11,6 +11,19 @@ const usePostgres = Boolean(postgresUrl);
 const dbPath = path.join(__dirname, "data.sqlite");
 let sqlite = null;
 
+function describePostgresUrl(value) {
+  if (!value) {
+    return "not configured";
+  }
+
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.hostname}:${url.port || "default"}`;
+  } catch (_error) {
+    return "invalid URL";
+  }
+}
+
 if (!usePostgres) {
   const sqlite3 = require("sqlite3").verbose();
   sqlite = new sqlite3.Database(dbPath);
@@ -111,6 +124,8 @@ async function all(sql, params = []) {
 
 async function initializeDatabase() {
   if (usePostgres) {
+    console.log(`Using Postgres database: ${describePostgresUrl(postgresUrl)}`);
+
     await run(`
       CREATE TABLE IF NOT EXISTS accounts (
         id BIGSERIAL PRIMARY KEY,

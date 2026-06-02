@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const path = require("path");
 const express = require("express");
 const {
@@ -18,6 +20,7 @@ const {
 
 const app = express();
 const port = process.env.PORT || 3000;
+const host = process.env.HOST || "0.0.0.0";
 let server;
 const storageProvider =
   process.env.SUPABASE_DB_URL ||
@@ -238,9 +241,9 @@ app.post("/api/messages", async (request, response) => {
 
 initializeDatabase()
   .then(() => {
-    server = app.listen(port, () => {
+    server = app.listen(port, host, () => {
       console.log(
-        `Server running on http://localhost:${port} using ${storageProvider}`,
+        `Server running on http://${host}:${port} using ${storageProvider}`,
       );
     });
   })

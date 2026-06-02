@@ -27,11 +27,19 @@ cp .env.example .env
 npm start
 ```
 
-4. Open:
+4. Open on your computer:
 
 ```text
 http://localhost:3000
 ```
+
+5. To test with multiple phones on the same Wi-Fi, open the same computer's LAN address on each phone, for example:
+
+```text
+http://192.168.1.20:3000
+```
+
+Do not open `localhost` separately on each phone. Each device treats its own `localhost` as itself, so they will not share usernames unless they all connect to the same backend.
 
 ## Best Setup For Multiple Phones
 
@@ -71,6 +79,8 @@ To use Supabase, add a Postgres connection string to `.env`:
 ```text
 SUPABASE_DB_URL=postgresql://postgres:password@db.your-project.supabase.co:5432/postgres
 ```
+
+The server now reads `.env` automatically on startup, so local `SUPABASE_DB_URL`, `PORT`, `HOST`, and `ALLOWED_ORIGIN` settings are applied without extra steps.
 
 On startup, the server will automatically create the required tables in Supabase:
 

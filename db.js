@@ -609,23 +609,51 @@ async function getInbox(currentUserId) {
       FROM (
         SELECT
           CASE
-            WHEN sender_id = ? THEN receiver_id
-            ELSE sender_id
-          END AS other_id,
-          MAX(id) AS message_id
-        FROM direct_messages
-        WHERE sender_id = ? OR receiver_id = ?
-        GROUP BY other_id
-      ) inbox
-      JOIN direct_messages latest ON latest.id = inbox.message_id
-      JOIN accounts account ON account.id = inbox.other_id
-      ORDER BY latest.id DESC
+            WHEN requester_id = ? THEN receiver_id
+            ELSE requester_id
+          END AS other_id
+        FROM friend_requests
+        WHERE status = 'accepted'
+          AND (requester_id = ? OR receiver_id = ?)
+      ) friends
+      JOIN accounts account ON account.id = friends.other_id
+      LEFT JOIN (
+        SELECT
+          paired.other_id,
+          message.content,
+          message.created_at,
+          message.id
+        FROM (
+          SELECT
+            CASE
+              WHEN sender_id = ? THEN receiver_id
+              ELSE sender_id
+            END AS other_id,
+            MAX(id) AS message_id
+          FROM direct_messages
+          WHERE sender_id = ? OR receiver_id = ?
+          GROUP BY other_id
+        ) paired
+        JOIN direct_messages message ON message.id = paired.message_id
+      ) latest ON latest.other_id = friends.other_id
+      ORDER BY
+        CASE WHEN latest.id IS NULL THEN 1 ELSE 0 END ASC,
+        latest.id DESC,
+        account.username ASC
     `,
-    [currentUserId, currentUserId, currentUserId],
+    [
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+      currentUserId,
+    ],
   );
 
   return rows.map((row) => ({
     account: publicAccount(row),
+    friendshipStatus: "friends",
     lastMessage: row.last_message,
     lastMessageAt: row.last_message_at,
   }));

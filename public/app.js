@@ -58,8 +58,11 @@ const isStaticSite = window.location.hostname.endsWith("github.io");
 const localDataKey = "pingmeStaticData";
 const apiBaseKey = "pingmeApiBase";
 const apiParam = new URLSearchParams(window.location.search).get("api");
+const sharedUserParam = new URLSearchParams(window.location.search).get("user");
 const configuredApiBase =
   typeof window.PINGME_API_BASE === "string" ? window.PINGME_API_BASE : "";
+const sharedUsername = normalizeLocalUsername(sharedUserParam);
+let hasHandledSharedUser = false;
 
 function normalizeApiBase(value) {
   const cleanValue = String(value || "").trim();
@@ -77,6 +80,10 @@ const remoteApiBase = (() => {
   if (fromQuery) {
     localStorage.setItem(apiBaseKey, fromQuery);
     return fromQuery;
+  }
+
+  if (!isStaticSite) {
+    return "";
   }
 
   const fromConfig = normalizeApiBase(configuredApiBase);
@@ -153,6 +160,19 @@ function copyText(text) {
 
 function setStatus(message) {
   statusElement.textContent = message || "";
+}
+
+function focusSharedUsername() {
+  if (!activeAccount || !sharedUsername || hasHandledSharedUser) {
+    return;
+  }
+
+  hasHandledSharedUser = true;
+  setMobileSlide("messages");
+  setPeopleTab("add");
+  searchInput.value = `@${sharedUsername}`;
+  searchAccounts(sharedUsername);
+  setStatus(`Open a chat by adding @${sharedUsername} as a friend first.`);
 }
 
 function setAuthMode(mode) {
@@ -299,6 +319,27 @@ function getLocalInbox(data, accountId) {
 
   const conversations = new Map();
 
+  data.friendRequests
+    .filter(
+      (entry) =>
+        entry.status === "accepted" &&
+        (entry.requesterId === current.id || entry.receiverId === current.id),
+    )
+    .forEach((entry) => {
+      const otherId =
+        entry.requesterId === current.id ? entry.receiverId : entry.requesterId;
+      const other = getLocalAccount(data, otherId);
+
+      if (other) {
+        conversations.set(other.id, {
+          account: publicLocalAccount(other),
+          friendshipStatus: "friends",
+          lastMessage: "",
+          lastMessageAt: "",
+        });
+      }
+    });
+
   data.messages
     .filter(
       (message) =>
@@ -312,15 +353,27 @@ function getLocalInbox(data, accountId) {
       if (other) {
         conversations.set(other.id, {
           account: publicLocalAccount(other),
+          friendshipStatus: "friends",
           lastMessage: message.content,
           lastMessageAt: message.createdAt,
         });
       }
     });
 
-  return [...conversations.values()].sort((left, right) =>
-    right.lastMessageAt.localeCompare(left.lastMessageAt),
-  );
+  return [...conversations.values()].sort((left, right) => {
+    const leftHasMessage = Boolean(left.lastMessageAt);
+    const rightHasMessage = Boolean(right.lastMessageAt);
+
+    if (leftHasMessage !== rightHasMessage) {
+      return leftHasMessage ? -1 : 1;
+    }
+
+    if (leftHasMessage && rightHasMessage) {
+      return right.lastMessageAt.localeCompare(left.lastMessageAt);
+    }
+
+    return left.account.username.localeCompare(right.account.username);
+  });
 }
 
 function handleLocalRequest(url, options = {}) {
@@ -705,6 +758,7 @@ function showSignedIn(account) {
   loadFriendRequests();
   loadInbox();
   searchAccounts("");
+  focusSharedUsername();
 }
 
 function showSignedOut() {
@@ -723,6 +777,10 @@ function showSignedOut() {
   renderMessages([]);
   setChatHeader(null);
   clearSession();
+
+  if (sharedUsername) {
+    setStatus(`Sign in to add @${sharedUsername} from this shared profile link.`);
+  }
 }
 
 function accountParams() {

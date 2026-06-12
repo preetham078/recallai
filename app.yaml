@@ -1,0 +1,7 @@
+runtime: nodejs20
+env: standard
+
+# Use package.json `start` script (node server.js)
+handlers:
+  - url: /.*
+    script: auto
